@@ -1,0 +1,156 @@
+buildscript {    
+    repositories {
+        maven {
+            url nexusRepoURL 
+        }
+    }
+    dependencies {
+        classpath("org.springframework.boot:spring-boot-gradle-plugin:${springBootVersion}")
+        classpath("com.google.protobuf:protobuf-gradle-plugin:0.8.7")
+        classpath("se.transmode.gradle:gradle-docker:${gradleDockerVersion}")
+        classpath("org.sonarsource.scanner.gradle:sonarqube-gradle-plugin:${gradleSonarVersion}")
+    }
+}
+
+apply plugin: 'java'
+apply plugin: 'idea'
+apply plugin: 'eclipse'
+apply plugin: 'docker'
+apply plugin: 'org.sonarqube'
+apply plugin: 'org.springframework.boot'
+apply plugin: 'io.spring.dependency-management'
+apply plugin: 'com.google.protobuf'
+apply plugin: 'jacoco'
+
+group = 'com.accelaero.aeroconnect'
+version = 'latest'
+sourceCompatibility = '1.8'
+
+repositories {
+	maven {
+        url nexusRepoURL
+     }     
+}
+
+dependencies {
+    implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
+    implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation "io.grpc:grpc-services:${grpcVersion}"
+    implementation "com.google.protobuf:protobuf-java-util:${protobufVersion}"
+    implementation "net.devh:grpc-client-spring-boot-starter:${springBootGrpcVersion}"
+    implementation "log4j:log4j:${log4jVersion}"
+    implementation "net.logstash.logback:logstash-logback-encoder:${logbackLogstashVersion}"
+    implementation "org.projectlombok:lombok:${lombokVersion}"
+    implementation "javax.mail:javax.mail-api:${javaMailApiVersion}"
+    implementation "javax.mail:mail:${javaMailVersion}"
+    implementation "org.apache.kafka:kafka-streams"
+    implementation "org.springframework.kafka:spring-kafka"
+    implementation ("com.accelaero.aeroconnect:aeroconnect-common:1.0.0-SNAPSHOT") {changing = true}
+    implementation "org.apache.commons:commons-lang3:3.0"
+    compile "io.grpc:grpc-netty:${grpcVersion}"
+    compile("net.devh:grpc-spring-boot-starter:2.3.0.RELEASE") {
+        exclude group: "io.grpc", module: "grpc-netty-shaded"
+
+    }
+    
+    annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+
+    testImplementation('org.springframework.boot:spring-boot-starter-test')
+    testImplementation "io.grpc:grpc-testing:${grpcVersion}"
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testImplementation "org.mockito:mockito-inline:${mockitoInlineVersion}"
+    testImplementation "org.powermock:powermock-module-junit4:2.0.2"
+    testImplementation "org.powermock:powermock-api-mockito2:2.0.2"
+
+    compile "org.codehaus.groovy:groovy-all:2.1.2"
+    compileOnly "javax.annotation:javax.annotation-api:${javaxAnnotationVersion}"
+
+
+}
+
+configurations.all {
+   resolutionStrategy.cacheChangingModulesFor 0, 'seconds'
+}
+
+sonarqube {
+	properties{
+		property "sonar.projectName" , "aeroConnect :: aeroconnect-receive-ackres-api-service"
+		property "sonar.projectKey" , "aeroconnect:aeroconnect-receive-ackres-api-service"
+		property "sonar.jacoco.reportPaths" , "${project.buildDir}/jacoco/test.exec"
+	}
+}
+
+jacocoTestReport {
+    reports {
+        xml.enabled = false
+        csv.enabled = false
+        html.enabled = true
+    }
+    executionData = files('build/jacoco/test.exec')
+}
+
+sourceSets {
+    main {
+        proto {
+            srcDir file("${projectDir}/../../../accelaero-api/accelaero/aeroconnect/proto/admin")
+            srcDir file("${projectDir}/../../../accelaero-api/accelaero/aeroconnect/proto/edifact")
+            include "**/*.proto"
+        }
+        java {
+            srcDirs "src/main/java"
+        }
+    }
+
+    test {
+        java {
+            srcDirs "src/test/java"
+        }
+
+    }
+}
+
+task cleanProtoGen {
+    delete "${projectDir}/src/main/java/generated"
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${protocVersion}"
+    }
+
+    plugins {
+        grpc {
+            artifact = "io.grpc:protoc-gen-grpc-java:${grpcVersion}"
+        }
+    }
+
+    generateProtoTasks.generatedFilesBaseDir = "${projectDir}/src/main/java/generated"
+
+    generateProtoTasks {
+
+        all().each { task ->
+            task.plugins {
+                grpc {
+                }
+            }
+        }
+    }
+}
+
+
+test { finalizedBy jacocoTestReport }
+
+task buildDocker(type: Docker, dependsOn: build) {
+    push = false    
+    project.group = 'aeroconnect'
+    project.archivesBaseName = jar.baseName
+    applicationName = jar.baseName
+    dockerfile = file('src/main/docker/Dockerfile')
+    doFirst {
+        copy {
+            from jar
+            into stageDir
+        }
+    }
+}

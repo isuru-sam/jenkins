@@ -1,0 +1,75 @@
+stage 'Checkout'
+	node('aeroconnect-buildnode'){
+	    checkout([  
+            $class: 'GitSCM', 
+            branches: [[name: '*/master']], 
+            doGenerateSubmoduleConfigurations: false, 
+            extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'aeroconnect-receive-ackres-api']],
+            submoduleCfg: [], 
+            userRemoteConfigs: [[credentialsId: 'ubuntu', url: 'ssh://git@bitbucket.org/accelaero/aeroconnect.git']]
+        ])
+        checkout([  
+            $class: 'GitSCM', 
+            branches: [[name: '*/master']], 
+            doGenerateSubmoduleConfigurations: false, 
+            extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'accelaero-api']], 
+            submoduleCfg: [], 
+            userRemoteConfigs: [[credentialsId: 'ubuntu', url: 'ssh://git@bitbucket.org/accelaero/accelaero-api.git']]
+        ])    
+    }
+
+stage 'Build'
+	node('aeroconnect-buildnode'){
+		dir('aeroconnect-receive-ackres-api/services/aeroconnect-receive-ackres-api-service'){
+			sh './gradlew clean build'
+			jacoco()
+			junit 'build/test-results/**/*.xml'
+	    }
+    }
+
+stage 'SonarQube Analysis'
+	node('aeroconnect-buildnode'){
+		dir('aeroconnect-receive-ackres-api/services/aeroconnect-receive-ackres-api-service'){
+			withSonarQubeEnv('sonarQube-Revamp'){
+			    sh './gradlew sonarqube'
+		    }
+	    }
+    }
+
+/*stage 'Check Quality Gate'
+  timeout(time: 5, unit: 'MINUTES') { 
+    def qg = waitForQualityGate() 
+    if (qg.status != 'OK') {
+      error "aeroconnect-receive-ackres-api-service pipeline aborted due to quality gate failure: ${qg.status}"
+    }
+  }*/
+
+stage 'AeroconnectReceiveAckresApiServiceDocker'
+	  node('aeroconnect-buildnode'){
+	  		sh 'docker rmi $(docker images | grep \'aeroconnect-receive-ackres-api-service\' | awk \'{print $3}\') -f || echo "No matching aeroconnect-receive-ackres-api-service images to remove"'
+	  		dir('aeroconnect-receive-ackres-api/services/aeroconnect-receive-ackres-api-service'){
+	  		sh './gradlew buildDocker'        	
+        }        
+    }
+  
+stage 'AeroconnectReceiveAckresApiServicePublishToECR'
+	node('aeroconnect-buildnode') {
+			docker.withRegistry('https://550144299809.dkr.ecr.eu-central-1.amazonaws.com/aeroconnect/aeroconnect-receive-ackres-api-service', 'ecr:eu-central-1:aeroconnect-aws-ecr-credentials') {
+    		docker.image('aeroconnect/aeroconnect-receive-ackres-api-service:latest').push('1.0.${BUILD_NUMBER}')
+		}
+		sh 'docker rmi $(docker images | grep \'aeroconnect-receive-ackres-api-service\' | awk \'{print $3}\') -f || echo "No matching aeroconnect-receive-ackres-api-service images to remove"'
+    }
+
+stage 'DeployAeroconnectReceiveAckresApiServer'
+    node('aeroconnect-receive-ackres-api-service') {
+      	docker.withRegistry('https://550144299809.dkr.ecr.eu-central-1.amazonaws.com/aeroconnect/aeroconnect-receive-ackres-api-service', 'ecr:eu-central-1:aeroconnect-aws-ecr-credentials') {
+	        sh 'docker stop aeroconnect-receive-ackres-api-service || echo "No aeroconnect-receive-ackres-api-service container to stop"'
+	        sh 'docker rm aeroconnect-receive-ackres-api-service || echo "No aeroconnect-receive-ackres-api-service container to remove"'
+	        sh 'docker rmi $(docker images | grep \'aeroconnect-receive-ackres-api-service\' | awk \'{print $3}\') -f || echo "No aeroconnect-ibmmq-api-service images to remove"'
+	        docker.image('aeroconnect/aeroconnect-receive-ackres-api-service:1.0.${BUILD_NUMBER}').pull()
+	        sh 'docker run --net=host -e "HOST_ADDRESS=10.2.4.11" -e GRPC_ACKRES_STREAMDELAY -e GRPC_CLIENT_AERO_CONNECT_ADMIN_SERVER_ADDRESS -e GRPC_CLIENT_AERO_CONNECT_ADMIN_SERVER_ENABLEKEEPALIVE -e GRPC_CLIENT_AERO_CONNECT_ADMIN_SERVER_KEEPALIVEWITHOUTCALLS -e GRPC_CLIENT_AERO_CONNECT_ADMIN_SERVER_NEGOTIATIONTYPE -e GRPC_SERVER_ADDRESS -e GRPC_SERVER_PORT -e KAFKA_ACKRES_CONSUMERGROUP_SUFFIX -e KAFKA_ACKRES_MAXPOLLRECORDS -e KAFKA_ACKRES_POLLINGFREQUENCY -e KAFKA_ACKRES_TOPICNAME -e KAFKA_BROKER_URL -e SPRING_APPLICATION_NAME -e SPRING_KAFKA_PRODUCER_KEY_DESERIALIZER -e SPRING_KAFKA_PRODUCER_VALUE_DESERIALIZER -e TEST_HOST -e TEST_PORT -v /var/log/aeroconnect-receive-ackres-api-service:/var/log/aeroconnect-receive-ackres-api-service:rw  --restart=always --name aeroconnect-receive-ackres-api-service   -d 550144299809.dkr.ecr.eu-central-1.amazonaws.com/aeroconnect/aeroconnect-receive-ackres-api-service:1.0.${BUILD_NUMBER}'
+	    }
+    }
+
+
+    
